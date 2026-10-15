@@ -8,17 +8,33 @@ class CampusSchematicMap extends StatefulWidget {
   const CampusSchematicMap({
     required this.places,
     required this.selectedPlace,
+    required this.routeStartPosition,
+    required this.routeStartLabel,
+    required this.routeDestinationPosition,
     required this.draftPosition,
+    required this.isSettingRouteStart,
+    required this.isSettingRouteDestination,
     required this.onMapTapped,
     required this.onPlaceTapped,
+    required this.onSetRouteStart,
+    required this.onSetRouteDestination,
+    required this.onResetRoute,
     super.key,
   });
 
   final List<Place> places;
   final Place? selectedPlace;
+  final Offset? routeStartPosition;
+  final String? routeStartLabel;
+  final Offset? routeDestinationPosition;
   final Offset? draftPosition;
+  final bool isSettingRouteStart;
+  final bool isSettingRouteDestination;
   final ValueChanged<Offset> onMapTapped;
   final ValueChanged<Place> onPlaceTapped;
+  final VoidCallback onSetRouteStart;
+  final VoidCallback onSetRouteDestination;
+  final VoidCallback onResetRoute;
 
   @override
   State<CampusSchematicMap> createState() => _CampusSchematicMapState();
@@ -68,7 +84,10 @@ class _CampusSchematicMapState extends State<CampusSchematicMap> {
                 children: [
                   CustomPaint(
                     painter: _CampusMapPainter(
-                      routeDestination: widget.selectedPlace?.position,
+                      routeDestination:
+                          widget.routeDestinationPosition ??
+                          widget.selectedPlace?.position,
+                      routeStartPosition: widget.routeStartPosition,
                     ),
                   ),
                   for (final place in widget.places)
@@ -93,6 +112,58 @@ class _CampusSchematicMapState extends State<CampusSchematicMap> {
                           Icons.location_pin,
                           color: Color(0xFFCD4E45),
                           size: 38,
+                        ),
+                      ),
+                    ),
+                  if (widget.routeDestinationPosition case final position?)
+                    Positioned(
+                      left: position.dx * mapWidth - 18,
+                      top: position.dy * mapHeight - 36,
+                      child: const Tooltip(
+                        message: 'Other destination',
+                        child: Icon(
+                          Icons.location_pin,
+                          color: Color(0xFFCD4E45),
+                          size: 38,
+                        ),
+                      ),
+                    ),
+                  if (widget.selectedPlace != null ||
+                      widget.routeDestinationPosition != null ||
+                      widget.routeStartPosition != null)
+                    Positioned(
+                      left:
+                          (widget.routeStartPosition ?? CampusSite.mainGate)
+                                  .dx *
+                              mapWidth -
+                          13,
+                      top:
+                          (widget.routeStartPosition ?? CampusSite.mainGate)
+                                  .dy *
+                              mapHeight -
+                          13,
+                      child: Tooltip(
+                        message:
+                            'Starting point: ${widget.routeStartLabel ?? 'Main Gate'}',
+                        child: Container(
+                          width: 26,
+                          height: 26,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF176B56),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 3),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x55000000),
+                                blurRadius: 5,
+                              ),
+                            ],
+                          ),
+                          child: const Icon(
+                            Icons.my_location,
+                            color: Colors.white,
+                            size: 14,
+                          ),
                         ),
                       ),
                     ),
@@ -138,9 +209,30 @@ class _CampusSchematicMapState extends State<CampusSchematicMap> {
                     const SizedBox(height: 6),
                     _MapControl(
                       icon: Icons.my_location,
-                      tooltip: 'Reset campus map',
+                      tooltip: 'Reset map zoom',
                       onPressed: () {
                         _transformController.value = Matrix4.identity();
+                      },
+                    ),
+                    const SizedBox(height: 6),
+                    _MapControl(
+                      icon: Icons.add_location_alt_outlined,
+                      tooltip: 'Set route starting point',
+                      onPressed: widget.onSetRouteStart,
+                    ),
+                    const SizedBox(height: 6),
+                    _MapControl(
+                      icon: Icons.flag_outlined,
+                      tooltip: 'Set another destination',
+                      onPressed: widget.onSetRouteDestination,
+                    ),
+                    const SizedBox(height: 6),
+                    _MapControl(
+                      icon: Icons.restart_alt,
+                      tooltip: 'Reset route',
+                      onPressed: () {
+                        _transformController.value = Matrix4.identity();
+                        widget.onResetRoute();
                       },
                     ),
                   ],
@@ -152,7 +244,15 @@ class _CampusSchematicMapState extends State<CampusSchematicMap> {
                 bottom: 12,
                 child: _MapBadge(
                   icon: Icons.touch_app_outlined,
-                  label: widget.draftPosition == null
+                  label: widget.isSettingRouteDestination
+                      ? 'Tap campus to choose another destination'
+                      : widget.isSettingRouteStart
+                      ? 'Tap campus to mark your current location'
+                      : widget.routeDestinationPosition != null
+                      ? 'Destination: Other location'
+                      : widget.routeStartPosition != null
+                      ? 'Start: ${widget.routeStartLabel ?? 'My location'}'
+                      : widget.draftPosition == null
                       ? 'Tap inside campus to add a pin'
                       : 'Pin ready · tap Add place to save',
                 ),
@@ -166,9 +266,13 @@ class _CampusSchematicMapState extends State<CampusSchematicMap> {
 }
 
 class _CampusMapPainter extends CustomPainter {
-  const _CampusMapPainter({required this.routeDestination});
+  const _CampusMapPainter({
+    required this.routeDestination,
+    required this.routeStartPosition,
+  });
 
   final Offset? routeDestination;
+  final Offset? routeStartPosition;
 
   Offset _point(Offset normalized, Size size) {
     return Offset(normalized.dx * size.width, normalized.dy * size.height);
@@ -230,44 +334,107 @@ class _CampusMapPainter extends CustomPainter {
         ..strokeJoin = StrokeJoin.round,
     );
 
-    final field = RRect.fromRectAndRadius(
+    final smartBuilding = RRect.fromRectAndRadius(
       Rect.fromLTWH(
-        size.width * 0.39,
-        size.height * 0.42,
-        size.width * 0.22,
-        size.height * 0.14,
+        size.width * 0.4,
+        size.height * 0.39,
+        size.width * 0.2,
+        size.height * 0.2,
       ),
-      const Radius.circular(18),
+      const Radius.circular(12),
     );
-    canvas.drawRRect(field, Paint()..color = const Color(0xFF83C78B));
+    canvas.drawRRect(smartBuilding, Paint()..color = const Color(0xFFD7E2E8));
     canvas.drawRRect(
-      field,
+      smartBuilding,
       Paint()
-        ..color = const Color(0xFF39845B)
+        ..color = const Color(0xFF577482)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5,
+        ..strokeWidth = 1.4,
     );
-    canvas.drawLine(
-      Offset(size.width * 0.5, size.height * 0.43),
-      Offset(size.width * 0.5, size.height * 0.55),
+    final buildingWindowPaint = Paint()..color = const Color(0xFF84B6C5);
+    for (final windowX in [0.425, 0.47, 0.515, 0.56]) {
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(
+            size.width * windowX,
+            size.height * 0.415,
+            size.width * 0.025,
+            size.height * 0.035,
+          ),
+          const Radius.circular(2),
+        ),
+        buildingWindowPaint,
+      );
+    }
+    final smartBuildingLabel = TextPainter(
+      text: TextSpan(
+        text: 'SMART BUILDING',
+        style: TextStyle(
+          color: const Color(0xFF17382F),
+          fontSize: math.max(8, size.shortestSide * 0.025),
+          fontWeight: FontWeight.w800,
+          letterSpacing: 0.1,
+          height: 1,
+        ),
+      ),
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: size.width * 0.19);
+    smartBuildingLabel.paint(
+      canvas,
+      Offset(
+        size.width * 0.405 + (size.width * 0.19 - smartBuildingLabel.width) / 2,
+        size.height * 0.525,
+      ),
+    );
+
+    final basketballCourt = RRect.fromRectAndRadius(
+      Rect.fromLTWH(
+        size.width * 0.68,
+        size.height * 0.62,
+        size.width * 0.14,
+        size.height * 0.13,
+      ),
+      const Radius.circular(8),
+    );
+    canvas.drawRRect(basketballCourt, Paint()..color = const Color(0xFFD9A45F));
+    canvas.drawRRect(
+      basketballCourt,
       Paint()
-        ..color = Colors.white.withValues(alpha: 0.8)
+        ..color = const Color(0xFF936536)
+        ..style = PaintingStyle.stroke
         ..strokeWidth = 1.2,
+    );
+    final courtLinePaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.88)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    canvas.drawLine(
+      Offset(size.width * 0.75, size.height * 0.625),
+      Offset(size.width * 0.75, size.height * 0.745),
+      courtLinePaint,
     );
     canvas.drawCircle(
-      Offset(size.width * 0.5, size.height * 0.49),
-      size.shortestSide * 0.022,
-      Paint()
-        ..color = Colors.white.withValues(alpha: 0.85)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.2,
+      Offset(size.width * 0.75, size.height * 0.685),
+      size.shortestSide * 0.018,
+      courtLinePaint,
+    );
+    canvas.drawCircle(
+      Offset(size.width * 0.696, size.height * 0.685),
+      size.shortestSide * 0.012,
+      courtLinePaint,
+    );
+    canvas.drawCircle(
+      Offset(size.width * 0.804, size.height * 0.685),
+      size.shortestSide * 0.012,
+      courtLinePaint,
     );
 
     for (final tree in const [
       Offset(0.18, 0.28),
       Offset(0.81, 0.29),
       Offset(0.17, 0.67),
-      Offset(0.81, 0.72),
+      Offset(0.83, 0.57),
       Offset(0.35, 0.80),
       Offset(0.67, 0.81),
     ]) {
@@ -288,11 +455,9 @@ class _CampusMapPainter extends CustomPainter {
     }
 
     if (routeDestination case final destination?) {
+      final start = routeStartPosition ?? CampusSite.mainGate;
       final route = Path()
-        ..moveTo(
-          size.width * CampusSite.mainGate.dx,
-          size.height * CampusSite.mainGate.dy,
-        )
+        ..moveTo(size.width * start.dx, size.height * start.dy)
         ..lineTo(size.width * CampusSite.center.dx, size.height * 0.68)
         ..lineTo(
           size.width * CampusSite.center.dx,
@@ -313,7 +478,8 @@ class _CampusMapPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _CampusMapPainter oldDelegate) {
-    return routeDestination != oldDelegate.routeDestination;
+    return routeDestination != oldDelegate.routeDestination ||
+        routeStartPosition != oldDelegate.routeStartPosition;
   }
 }
 

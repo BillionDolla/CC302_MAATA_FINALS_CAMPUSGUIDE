@@ -147,6 +147,114 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('sets a route start anywhere and resets the map route', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(const CampusGuideApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Map').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Set route starting point'));
+    await tester.pumpAndSettle();
+    final mapRect = tester.getRect(find.byType(CampusSchematicMap));
+    await tester.tapAt(
+      Offset(
+        mapRect.left + mapRect.width / 2,
+        mapRect.top + mapRect.height * 0.48,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Start: My location'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Reset route'));
+    await tester.pumpAndSettle();
+    expect(find.text('Tap inside campus to add a pin'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Back to all places'));
+    await tester.pumpAndSettle();
+    expect(find.text('Search places'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('sets another route destination anywhere on the map', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(const CampusGuideApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Map').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Set another destination'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Tap campus to choose another destination'),
+      findsOneWidget,
+    );
+    final mapRect = tester.getRect(find.byType(CampusSchematicMap));
+    await tester.tapAt(
+      Offset(
+        mapRect.left + mapRect.width * 0.5,
+        mapRect.top + mapRect.height * 0.48,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Destination: Other location'), findsOneWidget);
+    expect(find.byTooltip('Other destination'), findsOneWidget);
+    await tester.tap(find.byTooltip('Reset route'));
+    await tester.pumpAndSettle();
+    expect(find.text('Destination: Other location'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('routes from a selected place to another campus place', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(const CampusGuideApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Search').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, 'Library');
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Place details').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Start route here'));
+    await tester.pumpAndSettle();
+    expect(find.text('Start: Library'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Back to all places'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, 'Student Center');
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Place details').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Show campus route'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Walking route from Library to Student Center is shown on the map.',
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('restores the active screen and search after a refresh', (
     tester,
   ) async {

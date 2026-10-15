@@ -127,6 +127,10 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
   List<Place> _apiPlaces = CampusApi.featuredPlaces;
   List<Place> _savedPlaces = [];
   Place? _selectedPlace;
+  Offset? _routeStartPosition;
+  String? _routeStartName;
+  Offset? _routeDestinationPosition;
+  bool _isSettingRouteDestination = false;
   Offset? _draftPosition;
   String? _apiError;
   String? _storageError;
@@ -135,6 +139,7 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
   bool _isInitializing = true;
   bool _isLoadingPlaces = false;
   bool _isAddPlaceDialogOpen = false;
+  bool _isSettingRouteStart = false;
   _PlaceDraft? _addPlaceDraft;
 
   List<Place> get _allPlaces {
@@ -159,10 +164,31 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
 
   void _onMapTapped(Offset position) {
     if (!_isInsideCampus(position)) {
-      _showMessage('Pins can only be added inside the campus boundary.');
+      _showMessage(
+        _isSettingRouteStart
+            ? 'Starting points must be inside the campus boundary.'
+            : _isSettingRouteDestination
+            ? 'Destinations must be inside the campus boundary.'
+            : 'Pins can only be added inside the campus boundary.',
+      );
       return;
     }
-    setState(() => _draftPosition = position);
+    setState(() {
+      if (_isSettingRouteStart) {
+        _routeStartPosition = position;
+        _routeStartName = 'My location';
+        _isSettingRouteStart = false;
+        _routeDestinationPosition = null;
+        _draftPosition = null;
+      } else if (_isSettingRouteDestination) {
+        _routeDestinationPosition = position;
+        _selectedPlace = null;
+        _isSettingRouteDestination = false;
+        _draftPosition = null;
+      } else {
+        _draftPosition = position;
+      }
+    });
     unawaited(_persistViewState());
   }
 
@@ -226,9 +252,7 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
     if (filters is List) {
       _filters
         ..clear()
-        ..addAll(
-          filters.whereType<String>().map(PlaceCategory.fromName),
-        );
+        ..addAll(filters.whereType<String>().map(PlaceCategory.fromName));
     }
 
     final draftX = decoded['draftX'];
@@ -236,6 +260,28 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
     if (draftX is num && draftY is num) {
       final position = Offset(draftX.toDouble(), draftY.toDouble());
       if (CampusSite.contains(position)) _draftPosition = position;
+    }
+
+    final routeStartX = decoded['routeStartX'];
+    final routeStartY = decoded['routeStartY'];
+    if (routeStartX is num && routeStartY is num) {
+      final position = Offset(routeStartX.toDouble(), routeStartY.toDouble());
+      if (CampusSite.contains(position)) {
+        _routeStartPosition = position;
+        _routeStartName = decoded['routeStartName'] as String? ?? 'My location';
+      }
+    }
+
+    final routeDestinationX = decoded['routeDestinationX'];
+    final routeDestinationY = decoded['routeDestinationY'];
+    if (routeDestinationX is num && routeDestinationY is num) {
+      final position = Offset(
+        routeDestinationX.toDouble(),
+        routeDestinationY.toDouble(),
+      );
+      if (CampusSite.contains(position)) {
+        _routeDestinationPosition = position;
+      }
     }
 
     final placeDraft = decoded['addPlaceDraft'];
@@ -266,6 +312,15 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
         'draftX': _draftPosition!.dx,
         'draftY': _draftPosition!.dy,
       },
+      if (_routeStartPosition != null) ...{
+        'routeStartX': _routeStartPosition!.dx,
+        'routeStartY': _routeStartPosition!.dy,
+        'routeStartName': _routeStartName,
+      },
+      if (_routeDestinationPosition != null) ...{
+        'routeDestinationX': _routeDestinationPosition!.dx,
+        'routeDestinationY': _routeDestinationPosition!.dy,
+      },
       'addPlaceDialogOpen': _isAddPlaceDialogOpen,
       if (draft != null)
         'addPlaceDraft': {
@@ -286,7 +341,10 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
         }
       } on Exception catch (error) {
         if (mounted) {
-          setState(() => _storageError = 'Your current screen could not be saved: $error');
+          setState(
+            () => _storageError =
+                'Your current screen could not be saved: $error',
+          );
         }
       }
     });
@@ -348,9 +406,7 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
     await _showAddPlaceDialogWithRestore(restoring: false);
   }
 
-  Future<void> _showAddPlaceDialogWithRestore({
-    required bool restoring,
-  }) async {
+  Future<void> _showAddPlaceDialogWithRestore({required bool restoring}) async {
     final position = _draftPosition ?? CampusSite.center;
     if (!restoring) {
       _addPlaceDraft = const _PlaceDraft(
@@ -460,23 +516,6 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
           child: Icon(place.category.icon),
         ),
         title: Text(place.name),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              place.category.label,
-              style: const TextStyle(color: Colors.black54),
-            ),
-            const SizedBox(height: 10),
-            Text(place.description),
-            const SizedBox(height: 10),
-            Text(
-              'Location is marked inside the campus.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
-        ),
         actions: [
           if (place.isSaved)
             TextButton.icon(
@@ -509,18 +548,112 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
             label: const Text('Show campus route'),
           ),
         ],
+        contentPadding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              place.category.label,
+              style: const TextStyle(color: Colors.black54),
+            ),
+            const SizedBox(height: 10),
+            Text(place.description),
+            const SizedBox(height: 10),
+            Text(
+              'Location is marked inside the campus.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+                _setRouteStart(place);
+              },
+              icon: const Icon(Icons.trip_origin),
+              label: const Text('Start route here'),
+            ),
+          ],
+        ),
       ),
     );
+  }
+
+  void _setRouteStart(Place place) {
+    setState(() {
+      _routeStartPosition = place.position;
+      _routeStartName = place.name;
+      _selectedPlace = null;
+      _routeDestinationPosition = null;
+      _draftPosition = null;
+      _isSettingRouteStart = false;
+      _isSettingRouteDestination = false;
+      _selectedTab = 1;
+    });
+    unawaited(_persistViewState());
+    _showMessage(
+      'Route will start at ${place.name}. Choose a destination to show the route.',
+    );
+  }
+
+  void _beginSettingRouteStart() {
+    setState(() {
+      _isSettingRouteStart = true;
+      _isSettingRouteDestination = false;
+      _routeDestinationPosition = null;
+      _selectedPlace = null;
+      _draftPosition = null;
+    });
+    unawaited(_persistViewState());
+    _showMessage('Tap the campus map to mark your current location.');
+  }
+
+  void _beginSettingRouteDestination() {
+    setState(() {
+      _isSettingRouteDestination = true;
+      _isSettingRouteStart = false;
+      _draftPosition = null;
+    });
+    unawaited(_persistViewState());
+    _showMessage('Tap any point inside campus to set another destination.');
+  }
+
+  void _resetCampusRoute() {
+    setState(() {
+      _selectedPlace = null;
+      _routeStartPosition = null;
+      _routeStartName = null;
+      _routeDestinationPosition = null;
+      _isSettingRouteDestination = false;
+      _draftPosition = null;
+      _isSettingRouteStart = false;
+    });
+    unawaited(_persistViewState());
+  }
+
+  void _showAllPlaces() {
+    _searchController.clear();
+    setState(() {
+      _placeQuery = '';
+      _filters.clear();
+      _selectedTab = 2;
+    });
+    unawaited(_persistViewState());
   }
 
   void _showCampusRoute(Place place) {
     setState(() {
       _selectedPlace = place;
+      _routeDestinationPosition = null;
       _draftPosition = null;
+      _isSettingRouteStart = false;
+      _isSettingRouteDestination = false;
       _selectedTab = 1;
     });
     unawaited(_persistViewState());
-    _showMessage('Campus walking route to ${place.name} is shown on the map.');
+    _showMessage(
+      'Walking route from ${_routeStartName ?? 'Main Gate'} to ${place.name} is shown on the map.',
+    );
   }
 
   void _showMessage(String message) {
@@ -847,6 +980,11 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
             children: [
               Row(
                 children: [
+                  IconButton(
+                    tooltip: 'Back to all places',
+                    onPressed: _showAllPlaces,
+                    icon: const Icon(Icons.arrow_back),
+                  ),
                   Expanded(
                     child: Text(
                       'Campus map · School grounds',
@@ -1009,9 +1147,17 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
     return CampusSchematicMap(
       places: visiblePlaces,
       selectedPlace: _selectedPlace,
+      routeStartPosition: _routeStartPosition,
+      routeStartLabel: _routeStartName,
+      routeDestinationPosition: _routeDestinationPosition,
       draftPosition: _draftPosition,
+      isSettingRouteStart: _isSettingRouteStart,
+      isSettingRouteDestination: _isSettingRouteDestination,
       onMapTapped: _onMapTapped,
       onPlaceTapped: _showPlaceDetails,
+      onSetRouteStart: _beginSettingRouteStart,
+      onSetRouteDestination: _beginSettingRouteDestination,
+      onResetRoute: _resetCampusRoute,
     );
   }
 
