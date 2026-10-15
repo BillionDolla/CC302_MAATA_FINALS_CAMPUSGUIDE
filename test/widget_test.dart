@@ -146,4 +146,92 @@ void main() {
     expect(find.text('Library'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('restores the active screen and search after a refresh', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1200, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(const CampusGuideApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Search').last);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, 'Student Center');
+    await tester.pumpAndSettle();
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const CampusGuideApp());
+    await tester.pumpAndSettle();
+
+    expect(find.text('Search places'), findsOneWidget);
+    expect(find.text('Search results'), findsOneWidget);
+    expect(
+      tester.widget<TextField>(find.byType(TextField).first).controller!.text,
+      'Student Center',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('restores an unfinished add-place form after a refresh', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(const CampusGuideApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Map').last);
+    await tester.pumpAndSettle();
+    final mapRect = tester.getRect(find.byType(CampusSchematicMap));
+    await tester.tapAt(
+      Offset(
+        mapRect.left + mapRect.width / 2,
+        mapRect.top + mapRect.height * 0.48,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Add a campus place').first);
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField).first, 'Science Lab');
+    await tester.enterText(
+      find.byType(TextFormField).last,
+      'Second floor, east wing',
+    );
+    await tester.pumpAndSettle();
+
+    final preferences = await SharedPreferences.getInstance();
+    final savedViewState = preferences.getString('campus_guide_view_state');
+    expect(savedViewState, contains('"addPlaceDialogOpen":true'));
+    expect(savedViewState, contains('"name":"Science Lab"'));
+    expect(savedViewState, contains('"description":"Second floor, east wing"'));
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+    await preferences.setString('campus_guide_view_state', savedViewState!);
+    await tester.pumpWidget(const CampusGuideApp());
+    await tester.pumpAndSettle();
+
+    expect(find.text('Add a campus place'), findsOneWidget);
+    expect(
+      tester
+          .widget<TextFormField>(find.byType(TextFormField).first)
+          .controller!
+          .text,
+      'Science Lab',
+    );
+    expect(
+      tester
+          .widget<TextFormField>(find.byType(TextFormField).last)
+          .controller!
+          .text,
+      'Second floor, east wing',
+    );
+    expect(tester.takeException(), isNull);
+  });
 }

@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:campus_guide/models/campus_site.dart';
 import 'package:campus_guide/models/place.dart';
@@ -115,10 +118,12 @@ class CampusGuideHome extends StatefulWidget {
 
 class _CampusGuideHomeState extends State<CampusGuideHome> {
   static const _placesKey = 'campus_guide_saved_places';
+  static const _viewStateKey = 'campus_guide_view_state';
 
   final _api = CampusApi();
   final _searchController = TextEditingController();
   final Set<PlaceCategory> _filters = {};
+  Future<void> _viewStateWrites = Future<void>.value();
   List<Place> _apiPlaces = CampusApi.featuredPlaces;
   List<Place> _savedPlaces = [];
   Place? _selectedPlace;
@@ -129,6 +134,8 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
   int _selectedTab = 0;
   bool _isInitializing = true;
   bool _isLoadingPlaces = false;
+  bool _isAddPlaceDialogOpen = false;
+  _PlaceDraft? _addPlaceDraft;
 
   List<Place> get _allPlaces {
     final savedIds = _savedPlaces.map((place) => place.id).toSet();
@@ -156,6 +163,7 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
       return;
     }
     setState(() => _draftPosition = position);
+    unawaited(_persistViewState());
   }
 
   @override
@@ -180,14 +188,114 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
             .where((place) => CampusSite.contains(place.position))
             .toList();
       }
+      final savedViewState = preferences.getString(_viewStateKey);
+      if (savedViewState != null) _restoreViewState(savedViewState);
     } on Exception catch (error) {
       _storageError = 'Saved data could not be loaded: $error';
     } finally {
       if (mounted) {
         setState(() => _isInitializing = false);
+        if (_isAddPlaceDialogOpen) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              unawaited(_showAddPlaceDialogWithRestore(restoring: true));
+            }
+          });
+        }
         await _loadNearbyPlaces(showFeedback: false);
       }
     }
+  }
+
+  void _restoreViewState(String raw) {
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('Saved app state has an invalid format.');
+    }
+
+    final tab = decoded['tab'];
+    if (tab is int && tab >= 0 && tab < 5) _selectedTab = tab;
+
+    final query = decoded['query'];
+    if (query is String) {
+      _placeQuery = query;
+      _searchController.text = query;
+    }
+
+    final filters = decoded['filters'];
+    if (filters is List) {
+      _filters
+        ..clear()
+        ..addAll(
+          filters.whereType<String>().map(PlaceCategory.fromName),
+        );
+    }
+
+    final draftX = decoded['draftX'];
+    final draftY = decoded['draftY'];
+    if (draftX is num && draftY is num) {
+      final position = Offset(draftX.toDouble(), draftY.toDouble());
+      if (CampusSite.contains(position)) _draftPosition = position;
+    }
+
+    final placeDraft = decoded['addPlaceDraft'];
+    if (placeDraft is Map<String, dynamic>) {
+      _addPlaceDraft = _PlaceDraft(
+        name: placeDraft['name'] as String? ?? '',
+        category: PlaceCategory.fromName(placeDraft['category'] as String?),
+        description: placeDraft['description'] as String? ?? '',
+      );
+    }
+    _isAddPlaceDialogOpen = decoded['addPlaceDialogOpen'] == true;
+    if (_isAddPlaceDialogOpen && _addPlaceDraft == null) {
+      _addPlaceDraft = const _PlaceDraft(
+        name: '',
+        category: PlaceCategory.academic,
+        description: '',
+      );
+    }
+  }
+
+  Future<void> _persistViewState() {
+    final draft = _addPlaceDraft;
+    final snapshot = jsonEncode({
+      'tab': _selectedTab,
+      'query': _searchController.text,
+      'filters': _filters.map((category) => category.name).toList(),
+      if (_draftPosition != null) ...{
+        'draftX': _draftPosition!.dx,
+        'draftY': _draftPosition!.dy,
+      },
+      'addPlaceDialogOpen': _isAddPlaceDialogOpen,
+      if (draft != null)
+        'addPlaceDraft': {
+          'name': draft.name,
+          'category': draft.category.name,
+          'description': draft.description,
+        },
+    });
+
+    _viewStateWrites = _viewStateWrites.then((_) async {
+      try {
+        final preferences = await SharedPreferences.getInstance();
+        final saved = await preferences.setString(_viewStateKey, snapshot);
+        if (!saved && mounted) {
+          setState(
+            () => _storageError = 'Your current screen could not be saved.',
+          );
+        }
+      } on Exception catch (error) {
+        if (mounted) {
+          setState(() => _storageError = 'Your current screen could not be saved: $error');
+        }
+      }
+    });
+    return _viewStateWrites;
+  }
+
+  void _setSelectedTab(int index) {
+    setState(() => _selectedTab = index);
+    unawaited(_persistViewState());
   }
 
   Future<void> _loadNearbyPlaces({bool showFeedback = true}) async {
@@ -237,12 +345,37 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
   }
 
   Future<void> _showAddPlaceDialog() async {
+    await _showAddPlaceDialogWithRestore(restoring: false);
+  }
+
+  Future<void> _showAddPlaceDialogWithRestore({
+    required bool restoring,
+  }) async {
     final position = _draftPosition ?? CampusSite.center;
+    if (!restoring) {
+      _addPlaceDraft = const _PlaceDraft(
+        name: '',
+        category: PlaceCategory.academic,
+        description: '',
+      );
+    }
+    _isAddPlaceDialogOpen = true;
+    await _persistViewState();
+    if (!mounted) return;
     final draft = await showDialog<_PlaceDraft>(
       context: context,
-      builder: (_) => _AddPlaceDialog(position: position),
+      builder: (_) => _AddPlaceDialog(
+        position: position,
+        initialDraft: _addPlaceDraft!,
+        onDraftChanged: (value) {
+          _addPlaceDraft = value;
+          unawaited(_persistViewState());
+        },
+      ),
     );
 
+    _isAddPlaceDialogOpen = false;
+    _addPlaceDraft = null;
     if (draft != null && mounted) {
       final place = Place(
         id: 'saved-${DateTime.now().microsecondsSinceEpoch}',
@@ -257,8 +390,11 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
         _selectedPlace = place;
         _draftPosition = null;
       });
+      await _persistViewState();
       await _savePlaces();
       if (mounted) _showMessage('${place.name} added to your saved places.');
+    } else {
+      await _persistViewState();
     }
   }
 
@@ -383,6 +519,7 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
       _draftPosition = null;
       _selectedTab = 1;
     });
+    unawaited(_persistViewState());
     _showMessage('Campus walking route to ${place.name} is shown on the map.');
   }
 
@@ -479,7 +616,7 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
             ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedTab,
-        onDestinationSelected: (index) => setState(() => _selectedTab = index),
+        onDestinationSelected: _setSelectedTab,
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),
@@ -540,7 +677,7 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
         subtitle: 'Explore the campus map',
         icon: Icons.map_outlined,
         color: const Color(0xFFCDECCB),
-        onTap: () => setState(() => _selectedTab = 1),
+        onTap: () => _setSelectedTab(1),
       ),
       _HomeAction(
         title: 'Buildings',
@@ -556,6 +693,7 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
               ..add(PlaceCategory.academic);
             _selectedTab = 2;
           });
+          unawaited(_persistViewState());
         },
       ),
       _HomeAction(
@@ -570,6 +708,7 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
             _filters.clear();
             _selectedTab = 2;
           });
+          unawaited(_persistViewState());
         },
       ),
       _HomeAction(
@@ -583,6 +722,7 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
             _placeQuery = '';
             _selectedTab = 2;
           });
+          unawaited(_persistViewState());
         },
       ),
     ];
@@ -674,7 +814,7 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
                   ),
                 ),
                 TextButton(
-                  onPressed: () => setState(() => _selectedTab = 2),
+                  onPressed: () => _setSelectedTab(2),
                   child: const Text('See all'),
                 ),
               ],
@@ -685,7 +825,7 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
                 place: place,
                 selected: false,
                 onTap: () {
-                  setState(() => _selectedTab = 1);
+                  _setSelectedTab(1);
                   _selectPlace(place);
                 },
                 onMore: () => _showPlaceDetails(place),
@@ -715,7 +855,7 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
                     ),
                   ),
                   TextButton.icon(
-                    onPressed: () => setState(() => _selectedTab = 2),
+                    onPressed: () => _setSelectedTab(2),
                     icon: const Icon(Icons.search, size: 18),
                     label: const Text('Find a place'),
                   ),
@@ -795,7 +935,10 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
     return TextField(
       controller: _searchController,
       textInputAction: TextInputAction.search,
-      onChanged: (value) => setState(() => _placeQuery = value.trim()),
+      onChanged: (value) {
+        setState(() => _placeQuery = value.trim());
+        unawaited(_persistViewState());
+      },
       decoration: InputDecoration(
         hintText: 'Search campus places',
         prefixIcon: const Icon(Icons.search),
@@ -806,6 +949,7 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
                 onPressed: () {
                   _searchController.clear();
                   setState(() => _placeQuery = '');
+                  unawaited(_persistViewState());
                 },
                 icon: const Icon(Icons.close),
               )
@@ -830,7 +974,10 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
           FilterChip(
             label: const Text('All campus places'),
             selected: _filters.isEmpty,
-            onSelected: (_) => setState(_filters.clear),
+            onSelected: (_) {
+              setState(_filters.clear);
+              unawaited(_persistViewState());
+            },
             showCheckmark: false,
           ),
           const SizedBox(width: 7),
@@ -847,6 +994,7 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
                     _filters.remove(category);
                   }
                 });
+                unawaited(_persistViewState());
               },
               showCheckmark: false,
             ),
@@ -980,7 +1128,7 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
                     ),
                     const SizedBox(height: 18),
                     FilledButton.icon(
-                      onPressed: () => setState(() => _selectedTab = 1),
+                      onPressed: () => _setSelectedTab(1),
                       icon: const Icon(Icons.map_outlined),
                       label: const Text('Explore the map'),
                     ),
@@ -1066,7 +1214,7 @@ class _CampusGuideHomeState extends State<CampusGuideHome> {
                     title: const Text('Campus area'),
                     subtitle: const Text('Schematic map of the school grounds'),
                     trailing: const Icon(Icons.chevron_right),
-                    onTap: () => setState(() => _selectedTab = 1),
+                    onTap: () => _setSelectedTab(1),
                   ),
                   const Divider(height: 1, indent: 56),
                   ListTile(
@@ -1163,19 +1311,39 @@ class _PlaceDraft {
 }
 
 class _AddPlaceDialog extends StatefulWidget {
-  const _AddPlaceDialog({required this.position});
+  const _AddPlaceDialog({
+    required this.position,
+    required this.initialDraft,
+    required this.onDraftChanged,
+  });
 
   final Offset position;
+  final _PlaceDraft initialDraft;
+  final ValueChanged<_PlaceDraft> onDraftChanged;
 
   @override
   State<_AddPlaceDialog> createState() => _AddPlaceDialogState();
 }
 
 class _AddPlaceDialogState extends State<_AddPlaceDialog> {
-  final _nameController = TextEditingController();
-  final _descriptionController = TextEditingController();
+  late final _nameController = TextEditingController(
+    text: widget.initialDraft.name,
+  );
+  late final _descriptionController = TextEditingController(
+    text: widget.initialDraft.description,
+  );
   final _formKey = GlobalKey<FormState>();
-  PlaceCategory _category = PlaceCategory.academic;
+  late PlaceCategory _category = widget.initialDraft.category;
+
+  void _notifyDraftChanged() {
+    widget.onDraftChanged(
+      _PlaceDraft(
+        name: _nameController.text,
+        category: _category,
+        description: _descriptionController.text,
+      ),
+    );
+  }
 
   @override
   void dispose() {
@@ -1220,6 +1388,7 @@ class _AddPlaceDialogState extends State<_AddPlaceDialog> {
                   controller: _nameController,
                   autofocus: true,
                   maxLength: 60,
+                  onChanged: (_) => _notifyDraftChanged(),
                   decoration: const InputDecoration(
                     labelText: 'Place name',
                     hintText: 'e.g. Student Services Office',
@@ -1243,12 +1412,16 @@ class _AddPlaceDialogState extends State<_AddPlaceDialog> {
                       )
                       .toList(),
                   onChanged: (value) {
-                    if (value != null) setState(() => _category = value);
+                    if (value != null) {
+                      setState(() => _category = value);
+                      _notifyDraftChanged();
+                    }
                   },
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
                   controller: _descriptionController,
+                  onChanged: (_) => _notifyDraftChanged(),
                   maxLength: 180,
                   maxLines: 3,
                   decoration: const InputDecoration(
