@@ -2,12 +2,12 @@
 set -euo pipefail
 
 FLUTTER_VERSION="${FLUTTER_VERSION:-3.47.7}"
+SDK_ROOT="${TMPDIR:-/tmp}/campus-guide-flutter-${FLUTTER_VERSION}"
+FLUTTER_DIR="${SDK_ROOT}/flutter"
 
 if command -v flutter >/dev/null 2>&1; then
   FLUTTER_BIN="$(command -v flutter)"
 else
-  SDK_ROOT="${TMPDIR:-/tmp}/campus-guide-flutter-${FLUTTER_VERSION}"
-  FLUTTER_DIR="${SDK_ROOT}/flutter"
   FLUTTER_BIN="${FLUTTER_DIR}/bin/flutter"
 
   if [[ ! -x "${FLUTTER_BIN}" ]]; then
@@ -27,6 +27,10 @@ fi
 if [[ ! -x "${FLUTTER_BIN}" ]]; then
   echo "ERROR: Flutter executable not found: ${FLUTTER_BIN}"
   exit 1
+fi
+
+if [[ -d "${FLUTTER_DIR}/.git" ]]; then
+  git config --global --add safe.directory "${FLUTTER_DIR}"
 fi
 
 "${FLUTTER_BIN}" --version
